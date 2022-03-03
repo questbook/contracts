@@ -120,6 +120,15 @@ Deploy the contracts to Hardhat Network:
 $ yarn deploy
 ```
 
+### Scribble and Fuzzing tests ([Reference](https://docs.scribble.codes/tutorials/property-checking-with-scribble-and-mythril))
+
+- Install scribble - `npm install -g eth-scribble`
+- Install mythril - `pip3 install mythril`
+- Generate scribbled annotated contracts - `scribble contracts/scribbled/Grant.sol --output-mode files --arm`
+- Run unit tests - `yarn test`
+- Run mythril - `myth a contracts/scribbled/Grant.sol -t 100 --solv 0.8.7` [It requires dependencies in contracts to be in absolute paths]
+- Revert scribbled annotated contracts to original version - `scribble contracts/scribbled/Grant.sol --output-mode files --disarm`
+
 ## Syntax Highlighting
 
 If you use VSCode, you can enjoy syntax highlighting for your Solidity code via the
