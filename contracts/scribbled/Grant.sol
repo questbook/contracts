@@ -1,0 +1,200 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.7;
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "../interfaces/IWorkspaceRegistry.sol";
+import "../interfaces/IApplicationRegistry.sol";
+
+/// @title Singleton grant contract used for updating a grant, depositing and disbursal of reward funds
+
+/// #if_succeeds workspaceId >= 0;
+/// #if_succeeds numApplicants >= 0;
+contract Grant {
+    /// @notice workspaceId to which the grant belongs
+    uint96 public workspaceId;
+
+    /// @notice number of submitted applicantions
+    uint96 public numApplicants;
+
+    /// @notice grant metadata pointer to IPFS hash
+    string public metadataHash;
+
+    /// @notice denotes if grant is receiving applications
+    bool public active;
+
+    /// @notice applicationRegistry interface used for fetching application owner
+    IApplicationRegistry public applicationReg;
+
+    /// @notice workspaceRegistry interface used for fetching fetching workspace admin
+    IWorkspaceRegistry public workspaceReg;
+
+    /// @notice Emitted when a grant is updated
+    event GrantUpdated(uint96 indexed workspaceId, string metadataHash, bool active, uint256 time);
+
+    /// @notice Emitted when funds are withdrawn
+    event FundsWithdrawn(address asset, uint256 amount, address recipient, uint256 time);
+
+    /// @notice Emitted when fund deposit fails
+    event FundsDepositFailed(address asset, uint256 amount, uint256 time);
+
+    /// @notice Emitted when grant milestone is disbursed
+    event DisburseReward(
+        uint96 indexed applicationId,
+        uint96 milestoneId,
+        address asset,
+        address sender,
+        uint256 amount,
+        bool isP2P,
+        uint256 time
+    );
+
+    /// @notice Emitted when disbursal fails
+    event DisburseRewardFailed(
+        uint96 indexed applicationId,
+        uint96 milestoneId,
+        address asset,
+        address sender,
+        uint256 amount,
+        uint256 time
+    );
+
+    modifier onlyWorkspaceAdmin() {
+        require(workspaceReg.isWorkspaceAdmin(workspaceId, msg.sender), "Unauthorised: Not an admin");
+        _;
+    }
+
+    modifier onlyApplicationRegistry() {
+        require(msg.sender == address(applicationReg), "Unauthorised: Not applicationRegistry");
+        _;
+    }
+
+    /**
+     * @notice Set grant details on contract deployment
+     * @param _workspaceId workspace id to which the grant belong
+     * @param _metadataHash metadata pointer
+     * @param _workspaceReg workspace registry interface
+     * @param _applicationReg application registry interface
+     */
+    constructor(
+        uint96 _workspaceId,
+        string memory _metadataHash,
+        IWorkspaceRegistry _workspaceReg,
+        IApplicationRegistry _applicationReg
+    ) {
+        workspaceId = _workspaceId;
+        active = true;
+        metadataHash = _metadataHash;
+        applicationReg = _applicationReg;
+        workspaceReg = _workspaceReg;
+    }
+
+    /**
+     * @notice Update number of applications on grant, can be called by applicationRegistry contract
+     */
+
+    /// #if_succeeds {:msg "Increments count of applicants"} old(numApplicants) + 1 == numApplicants;
+    function incrementApplicant() external onlyApplicationRegistry {
+        assert(numApplicants + 1 > numApplicants);
+        numApplicants += 1;
+    }
+
+    /**
+     * @notice Update the metadata pointer of a grant, can be called by workspace admins
+     * @param _metadataHash New URL that points to grant metadata
+     */
+    function updateGrant(string memory _metadataHash) external onlyWorkspaceAdmin {
+        require(numApplicants == 0, "GrantUpdate: Applicants have already started applying");
+        metadataHash = _metadataHash;
+        emit GrantUpdated(workspaceId, _metadataHash, active, block.timestamp);
+    }
+
+    /**
+     * @notice Update grant accessibility, can be called by workspace admins
+     * @param _canAcceptApplication set to false for disabling grant from receiving new applications
+     */
+
+    /// #if_succeeds {:msg "Should update state of grant"} active == _canAcceptApplication;
+    function updateGrantAccessibility(bool _canAcceptApplication) external onlyWorkspaceAdmin {
+        active = _canAcceptApplication;
+        emit GrantUpdated(workspaceId, metadataHash, _canAcceptApplication, block.timestamp);
+    }
+
+    /**
+     * @notice Withdraws funds from a grant to specified recipient, can be called only by workspace admin
+     * @param _erc20Interface interface for erc20 asset using which rewards are disbursed
+     * @param _amount Amount to be withdrawn for a given asset
+     * @param _recipient address of wallet where the funds should be withdrawn to
+     */
+
+    /// #if_succeeds {:msg "Should add balance of receipient"} _erc20Interface.balanceOf(_recipient) == old(_erc20Interface.balanceOf(_recipient)) + _amount;
+    /// #if_succeeds {:msg "Should reduce balance from contract"} _erc20Interface.balanceOf(address(this)) == old(_erc20Interface.balanceOf(address(this))) - _amount;
+    function withdrawFunds(
+        IERC20 _erc20Interface,
+        uint256 _amount,
+        address _recipient
+    ) external onlyWorkspaceAdmin {
+        emit FundsWithdrawn(address(_erc20Interface), _amount, _recipient, block.timestamp);
+        require(_erc20Interface.transfer(_recipient, _amount), "Failed to transfer funds");
+    }
+
+    /**
+     * @notice Disburses grant reward, can be called by applicationRegistry contract
+     * @param _applicationId application id for which the funds are disbursed
+     * @param _milestoneId milestone id for which the funds are disbursed
+     * @param _erc20Interface interface for erc20 asset using which rewards are disbursed
+     * @param _amount amount disbursed
+     */
+
+    /// #if_succeeds {:msg "Should transfer funds from contract to receipient"} _erc20Interface.balanceOf(applicationReg.getApplicationOwner(_applicationId)) == old(_erc20Interface.balanceOf(applicationReg.getApplicationOwner(_applicationId))) + _amount;
+    /// #if_succeeds {:msg "Should reduce balance from contract"} _erc20Interface.balanceOf(address(this)) == old(_erc20Interface.balanceOf(address(this))) - _amount;
+    function disburseReward(
+        uint96 _applicationId,
+        uint96 _milestoneId,
+        IERC20 _erc20Interface,
+        uint256 _amount
+    ) external onlyWorkspaceAdmin {
+        emit DisburseReward(
+            _applicationId,
+            _milestoneId,
+            address(_erc20Interface),
+            msg.sender,
+            _amount,
+            false,
+            block.timestamp
+        );
+        require(
+            _erc20Interface.transfer(applicationReg.getApplicationOwner(_applicationId), _amount),
+            "Failed to transfer funds"
+        );
+    }
+
+    /**
+     * @notice Disburses grant reward, can be called by applicationRegistry contract
+     * @param _applicationId application id for which the funds are disbursed
+     * @param _milestoneId milestone id for which the funds are disbursed
+     * @param _erc20Interface interface for erc20 asset using which rewards are disbursed
+     * @param _amount amount disbursed
+     */
+
+    /// #if_succeeds {:msg "Should transfer funds from sender to receipient"} _erc20Interface.balanceOf(applicationReg.getApplicationOwner(_applicationId)) == old(_erc20Interface.balanceOf(applicationReg.getApplicationOwner(_applicationId))) + _amount;
+    /// #if_succeeds {:msg "Should reduce balance from contract"} _erc20Interface.balanceOf(msg.sender) == old(_erc20Interface.balanceOf(msg.sender)) - _amount;
+    function disburseRewardP2P(
+        uint96 _applicationId,
+        uint96 _milestoneId,
+        IERC20 _erc20Interface,
+        uint256 _amount
+    ) external onlyWorkspaceAdmin {
+        emit DisburseReward(
+            _applicationId,
+            _milestoneId,
+            address(_erc20Interface),
+            msg.sender,
+            _amount,
+            true,
+            block.timestamp
+        );
+        require(
+            _erc20Interface.transferFrom(msg.sender, applicationReg.getApplicationOwner(_applicationId), _amount),
+            "Failed to transfer funds"
+        );
+    }
+}
